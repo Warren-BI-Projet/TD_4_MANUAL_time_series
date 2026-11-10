@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Série temporelle de CO₂ — Le Mans</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; background: #f5f8fa; color: #172632; }
+    body { max-width: 1100px; margin: auto; padding: 2rem 1rem; }
+    h1 { margin-bottom: .3rem; }
+    .intro { color: #4b5b66; max-width: 75ch; }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1rem; margin: 2rem 0; }
+    .kpi, .chart, #honesty { background: white; border: 1px solid #dce5ea; border-radius: 12px; padding: 1rem; }
+    .kpi strong { display: block; font-size: 1.5rem; color: #086b88; }
+    .kpi span, #updated { color: #586772; font-size: .9rem; }
+    #honesty { border-left: 5px solid #bd6d11; background: #fff9ed; line-height: 1.5; }
+    .chart { margin: 1rem 0; height: 480px; }
+    footer { color: #586772; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <h1>CO₂ atmosphérique au Mans</h1>
+  <p class="intro">Moyennes quotidiennes issues des données horaires du modèle CAMS via Open-Meteo. Les lissages et la projection linéaire sont calculés sur une fenêtre glissante de 90 jours.</p>
+  <div class="kpis" id="kpis" aria-live="polite">Chargement des données…</div>
+  <p id="honesty"></p>
+  <div class="chart"><canvas id="seriesChart" role="img" aria-label="Série de CO₂ observée, lissée et projetée"></canvas></div>
+  <p id="updated"></p>
+  <footer>Source : <a href="https://open-meteo.com/en/docs/air-quality-api">Open-Meteo Air Quality API</a>. La projection indique une tendance locale, pas une prévision validée.</footer>
+  <script>
+    const kpis = document.getElementById('kpis');
+    fetch('data/series_analysis.json')
+      .then(response => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json(); })
+      .then(data => {
+        const raw = data.raw || [];
+        if (!raw.some(point => point.value !== null)) throw new Error('Aucune observation disponible');
+        const observed = raw.filter(point => point.value !== null);
+        const gaps = data.gaps || [];
+        const projection = data.projection || [];
+        const slope = Number(data.trend_slope_per_day);
+        const cards = [
+          [observed.length, 'Jours observés'],
+          [gaps.length, 'Périodes manquantes'],
+          [`${slope >= 0 ? '+' : ''}${slope.toFixed(3)} ppm/j`, 'Pente sur la période'],
+          [`${observed.at(-1).value} ppm`, 'Dernière valeur observée']
+        ];
+        kpis.replaceChildren(...cards.map(([value, label]) => {
+          const card = document.createElement('div'); card.className = 'kpi';
+          const strong = document.createElement('strong'); strong.textContent = value;
+          const span = document.createElement('span'); span.textContent = label;
+          card.append(strong, span); return card;
+        }));
+        document.getElementById('honesty').textContent = data.honest_note || '';
+        const labels = raw.map(point => point.date).concat(projection.map(point => point.date));
+        function series(points) {
+          const lookup = new Map(points.map(point => [point.day, point.value]));
+          return labels.map((_, day) => lookup.has(day) ? lookup.get(day) : null);
+        }
+        new Chart(document.getElementById('seriesChart'), {
+          type: 'line',
+          data: { labels, datasets: [
+            { label: 'Observé (ppm)', data: series(raw), borderColor: '#086b88', pointRadius: 1.5, spanGaps: false },
+            { label: 'Moyenne mobile 7 jours', data: series(data.rolling_mean || []), borderColor: '#328052', pointRadius: 0, spanGaps: false },
+            { label: 'Lissage exponentiel', data: series(data.exp_smoothed || []), borderColor: '#8c4b9e', borderDash: [2, 3], pointRadius: 0 },
+            { label: 'Projection (confiance faible)', data: series(projection), borderColor: '#bd6d11', borderDash: [7, 5], pointRadius: 2 }
+          ] },
+          options: { responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: { title: { display: true, text: 'CO₂ au Mans : observations, lissages et projection' } },
+            scales: { x: { ticks: { maxTicksLimit: 12 }, title: { display: true, text: 'Date' } },
+                      y: { title: { display: true, text: 'CO₂ (ppm)' } } }
+          }
+        });
+        document.getElementById('updated').textContent =
+          `Analyse : ${data.generated_at} · ${gaps.length} période(s) manquante(s) · ` +
+          `${observed.filter(point => point.n_hours_observed < 24).length} jour(s) incomplet(s).`;
+      })
+      .catch(error => { kpis.textContent = `Analyse indisponible : ${error.message}. Lancer « Update analysis » dans GitHub Actions.`; });
+  </script>
+</body>
+</html>
